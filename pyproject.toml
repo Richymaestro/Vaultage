@@ -1,0 +1,15 @@
+[project]
+name = "vaultage"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10.8"
+dependencies = [
+    "pandas>=2.3.3",
+    "pyarrow>=21.0.0",
+    "python-dotenv>=1.1.1",
+    "pytz>=2025.2",
+    "requests>=2.32.5",
+    "streamlit>=1.50.0",
+    "web3>=7.13.0",
+]
