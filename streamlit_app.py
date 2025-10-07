@@ -10,8 +10,9 @@ import streamlit as st
 from src.storage import load_csv
 from src.chain import checksum
 from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS  # keep your config here
-from src.auth import require_login
-require_login()
+from src.auth import require_login_on_home, logout_button
+
+require_login_on_home()
 
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
@@ -87,28 +88,42 @@ h1, h2, h3, h4 { color: #e6e9ef; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Sidebar: Overview + per-vault pages (same tab via anchors) ----------
-st.sidebar.title("Vaults")
-
-def _slug(name: str) -> str:
+# ---------- Sidebar: Overview + per-vault pages (same tab via session+switch_page) ----------
+def slugify(name: str) -> str:
     return (
         name.lower()
-        .replace("&", "and").replace("/", " ").replace("_", " ").replace("-", " ")
-        .strip().replace(" ", "-")
+        .replace("&", "and")
+        .replace("/", " ")
+        .replace("_", " ")
+        .replace("-", " ")
+        .strip()
+        .replace(" ", "-")
     )
 
-def _link(label: str, href: str, active: bool = False):
-    cls = "sidebar-link active" if active else "sidebar-link"
-    st.sidebar.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
+ROUTES = {slugify(v["name"]): v for v in VAULTS}
+all_slugs = list(ROUTES.keys())
 
-# Overview link (this page)
-_link("🏠 Overview", "?", active=True)
+# initialize selected slug if absent
+if "vault_slug" not in st.session_state:
+    st.session_state.vault_slug = all_slugs[0] if all_slugs else None
 
-# Per-vault links to the pages (Streamlit routes by filename → "Vault" and "Reallocations")
+st.sidebar.title("Vaults")
+
+def _goto(target_page: str, slug: str):
+    st.session_state.vault_slug = slug
+    if target_page == "vault":
+        st.switch_page("pages/1_Vault.py")
+    else:
+        st.switch_page("pages/2_Reallocations.py")
+
 for v in VAULTS:
-    slug = _slug(v["name"])
-    _link(f"{v['name']} data", f"Vault?vault={slug}")
-    _link(f"{v['name']} EOA data", f"Reallocations?vault={slug}")
+    slug = slugify(v["name"])
+    if st.sidebar.button(f"{v['name']} data", use_container_width=True):
+        _goto("vault", slug)
+    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True):
+        _goto("eoa", slug)
+
+logout_button()
 
 # ---------- Helpers ----------
 def _to_dec(x, default=Decimal(0)):
@@ -199,7 +214,7 @@ def _summary_for_vault(v):
 
 # ---------- Page header ----------
 st.header("Morpho Vaults — Overview")
-st.caption(f"Start date (per-vault CSV): {START_DATE}. Click a vault below to open its Data or EOA view.")
+st.caption(f"Start date (per-vault CSV): {START_DATE}. Select a vault from the sidebar or use the buttons below.")
 
 # ---------- Summaries grid (incl. EOA summary) ----------
 N = len(VAULTS)
@@ -223,10 +238,14 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            slug = _slug(v["name"])
-            # same-tab links (anchor)
-            st.markdown(f'<a class="sidebar-link" href="Vault?vault={slug}">Open data →</a>', unsafe_allow_html=True)
-            st.markdown(f'<a class="sidebar-link" href="Reallocations?vault={slug}">Open EOA data →</a>', unsafe_allow_html=True)
+            slug = slugify(v["name"])
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Open data →", key=f"card-data-{slug}", use_container_width=True):
+                    _goto("vault", slug)
+            with b2:
+                if st.button("Open EOA data →", key=f"card-eoa-{slug}", use_container_width=True):
+                    _goto("eoa", slug)
 
 st.markdown(
     '<p class="small-note">Overview reads per-vault CSVs in <code>data/</code> and the EOA CSVs '

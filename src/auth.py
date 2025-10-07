@@ -3,62 +3,72 @@ import os
 import hashlib
 import streamlit as st
 
+try:
+    # optional: load .env automatically if python-dotenv is installed
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# ---------------------------
+# ENV KEYS (all optional)
+# ---------------------------
+# DISABLE_AUTH=1                     -> bypass login (handy for local dev)
+# APP_USER=admin                     -> username
+# APP_PASS=supersecret               -> password (plain), OR:
+# APP_PASS=sha256$<hex>              -> password as SHA256 hash
+# AUTH_TOKEN=some-long-token         -> enables magic link: ?token=some-long-token
+
 def _bypass_enabled() -> bool:
-    # Disable auth if env or secrets explicitly say so (use in local dev)
-    raw = str(st.secrets.get("disable_auth", os.getenv("DISABLE_AUTH", "0")))
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    raw = os.getenv("DISABLE_AUTH", "0")
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 def _check_user_pass(user: str, pw: str) -> bool:
-    # Prefer secrets: [auth] users = { username = "password_or_sha256$hex" }
-    users = st.secrets.get("auth", {}).get("users", {})
-    if users:
-        if user in users:
-            stored = str(users[user])
-            # allow SHA256: "sha256$<hex>"
-            if stored.startswith("sha256$"):
-                h = hashlib.sha256(pw.encode()).hexdigest()
-                return h == stored.split("$", 1)[1]
-            return pw == stored
-        return False
-
-    # Fallback env (single user)
     eu = os.getenv("APP_USER")
     ep = os.getenv("APP_PASS")
-    if eu and ep:
-        return user == eu and pw == ep
+    if not eu or not ep:
+        # No creds configured -> lock down by default unless auth bypassed
+        return False
 
-    # No configured credentials -> lock down by default
-    return False
+    if user != eu:
+        return False
+
+    stored = str(ep)
+    if stored.startswith("sha256$"):
+        h = hashlib.sha256(pw.encode()).hexdigest()
+        return h == stored.split("$", 1)[1]
+    return pw == stored
 
 def _check_token(tok: str) -> bool:
-    # Optional magic link token (?token=...)
-    t_secret = st.secrets.get("auth", {}).get("token") or os.getenv("AUTH_TOKEN")
-    return bool(t_secret) and tok == str(t_secret)
+    t = os.getenv("AUTH_TOKEN", "")
+    return bool(t) and tok == t
 
-def require_login() -> bool:
+# ---------------------------
+# Entry-page gate (shows form ONCE)
+# ---------------------------
+def require_login_on_home() -> bool:
     """
-    Gate the page. Returns True if access is granted; otherwise renders a login form and stops.
-    Auth is enabled by default unless disabled via DISABLE_AUTH=1 or secrets.disable_auth=true.
+    Call this ONLY in streamlit_app.py (home).
+    Auth is ON by default. Locally you can set DISABLE_AUTH=1 to bypass.
     """
-    # Bypass explicitly for local/dev
     if _bypass_enabled():
         st.session_state.logged_in = True
         st.session_state.username = "local"
         return True
 
-    # One-time token via URL (?token=...)
+    # Magic link via ?token=...
     qp = st.query_params
     tok = qp.get("token")
-    if tok and _check_token(tok if isinstance(tok, str) else str(tok)):
+    if isinstance(tok, list):  # older streamlit might return list
+        tok = tok[0] if tok else None
+    if tok and _check_token(str(tok)):
         st.session_state.logged_in = True
         st.session_state.username = "token"
         return True
 
-    # Session already authenticated
     if st.session_state.get("logged_in"):
         return True
 
-    # Render login form and block page
     st.markdown("## 🔒 Login")
     with st.form("login_form", clear_on_submit=False):
         u = st.text_input("Username")
@@ -69,14 +79,35 @@ def require_login() -> bool:
         if _check_user_pass(u, p):
             st.session_state.logged_in = True
             st.session_state.username = u
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Invalid credentials")
 
     st.stop()
 
+# ---------------------------
+# Other pages (no form)
+# ---------------------------
+def guard_other_pages():
+    """
+    Call this at the top of every subpage (pages/*.py).
+    If not logged in, show a link back to home and stop.
+    """
+    if _bypass_enabled():
+        return True
+    if st.session_state.get("logged_in"):
+        return True
+
+    st.markdown("### 🔒 Please log in")
+    st.info("Sign in on the homepage first.")
+    st.markdown('<a class="sidebar-link" href="?">Go to Login</a>', unsafe_allow_html=True)
+    st.stop()
+
+# ---------------------------
+# Logout button (optional)
+# ---------------------------
 def logout_button():
     if st.sidebar.button("Log out"):
         for k in ("logged_in", "username"):
             st.session_state.pop(k, None)
-        st.experimental_rerun()
+        st.rerun()

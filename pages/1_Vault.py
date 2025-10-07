@@ -7,19 +7,20 @@ import pytz
 import streamlit as st
 import altair as alt
 
+from src.auth import guard_other_pages, logout_button
 from src.chain import get_w3, checksum, find_block_at_or_before_timestamp
 from src.erc4626 import read_vault_snapshot
 from src.fees import get_fee_amount_for_day
 from src.storage import load_csv, save_csv, append_or_update_today, latest_date
 from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS
-from src.auth import require_login
-
-require_login()
 
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
 
 st.set_page_config(page_title="Vault Data", page_icon=None, layout="wide")
+
+# Guard (no form here). If not logged in, shows link back to home and stops.
+guard_other_pages()
 
 # ---------- Styling (subtle, professional; matches dashboard) ----------
 st.markdown("""
@@ -37,8 +38,9 @@ h1, h2, h3, h4 { color: #e6e9ef; }
   background: #0a0f1d;
   border-right: 1px solid #1f2a44;
 }
-[data-testid="stSidebarNav"] { display: none; }  /* hide default app/page list */
+[data-testid="stSidebarNav"] { display: none; }
 
+/* Sidebar buttons look */
 .sidebar-link {
   padding: .6rem .8rem;
   border-radius: 10px;
@@ -47,16 +49,6 @@ h1, h2, h3, h4 { color: #e6e9ef; }
   color: #cbd5e1 !important;
   text-decoration: none;
   border: 1px solid transparent;
-}
-.sidebar-link:hover {
-  background: #111936;
-  border-color: #26314e;
-}
-.sidebar-link.active {
-  background: #1a2442;
-  border-color: #2b3a62;
-  color: #f1f5f9 !important;
-  font-weight: 600;
 }
 
 /* Summary cards */
@@ -109,36 +101,39 @@ def _slug(name: str) -> str:
         .replace(" ", "-")
     )
 
-# ------- Routing / selection -------
 ROUTES = {_slug(v["name"]): v for v in VAULTS}
+all_slugs = list(ROUTES.keys())
 
-# get slug from query params (?vault=slug)
-qp = st.query_params
-if "vault" in qp and qp["vault"] in ROUTES:
-    current_slug = qp["vault"]
-else:
-    current_slug = next(iter(ROUTES)) if ROUTES else None
+# ---- Selected vault from session (no query params) ----
+slug = st.session_state.get("vault_slug", all_slugs[0] if all_slugs else None)
+if not slug or slug not in ROUTES:
+    slug = all_slugs[0] if all_slugs else None
+    st.session_state.vault_slug = slug
 
-if not current_slug:
-    st.error("No vaults configured.")
-    st.stop()
+active_vault = ROUTES[slug]
 
-active_vault = ROUTES[current_slug]
-
-# ------- Sidebar: Overview + per-vault pages (same-tab via anchors) -------
+# ------- Sidebar: Overview + per-vault pages (same-tab via buttons) -------
 st.sidebar.title("Vaults")
 
-def _sbar_link(label: str, href: str, active: bool = False):
-    cls = "sidebar-link active" if active else "sidebar-link"
-    st.sidebar.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
+def _goto(target_page: str, s: str):
+    st.session_state.vault_slug = s
+    if target_page == "vault":
+        st.switch_page("pages/1_Vault.py")
+    else:
+        st.switch_page("pages/2_Reallocations.py")
 
-# Overview link (root app)
-_sbar_link("🏠 Overview", "?", active=False)
+# Overview button
+if st.sidebar.button("🏠 Overview", use_container_width=True):
+    st.switch_page("streamlit_app.py")
 
 for v in VAULTS:
-    slug = _slug(v["name"])
-    _sbar_link(f"{v['name']} data", f"Vault?vault={slug}", active=(slug == current_slug))
-    _sbar_link(f"{v['name']} EOA data", f"Reallocations?vault={slug}", active=False)
+    s = _slug(v["name"])
+    if st.sidebar.button(f"{v['name']} data", use_container_width=True):
+        _goto("vault", s)
+    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True):
+        _goto("eoa", s)
+
+logout_button()
 
 # ------- Header -------
 st.header(f"{active_vault['name']}")
@@ -269,7 +264,7 @@ else:
     last_date  = pd.to_datetime(df_sorted["date"].iloc[-1]).date()
     elapsed_days = (last_date - first_date).days
 
-    # Annualized APY (since start): ((SP_last / SP_first) ** (365/days)) - 1
+    # Annualized APY (since start)
     if sp0 > 0 and elapsed_days > 0:
         total_ratio = (spN / sp0)
         ann_apy = (total_ratio ** (Decimal(365) / Decimal(elapsed_days))) - Decimal(1)
@@ -283,7 +278,7 @@ else:
     latest_sp = _to_dec(latest_row["share_price"])
     asset_symbol = latest_row.get("asset_symbol", "")
 
-    # Summary cards laid out side-by-side
+    # Summary cards
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f'''
@@ -306,73 +301,50 @@ else:
             <div class="val">{latest_sp:.4f}</div></div>
         ''', unsafe_allow_html=True)
 
-    # ------- CHARTS BELOW SUMMARY -------
+    # ------- CHARTS -------
     st.subheader("Charts")
 
     df_plot = df_sorted.copy()
     df_plot["Date"] = pd.to_datetime(df_plot["date"])
 
-    # Left axis: cumulative total yield over time (float)
     df_plot["cum_yield"] = pd.to_numeric(df_plot["yield_earned"], errors="coerce").fillna(0.0).cumsum().astype(float)
-
-    # Right axis: DAILY APY from CSV, as percentage (float)
     df_plot["daily_apy_pct"] = (pd.to_numeric(df_plot["apy"], errors="coerce").fillna(0.0) * 100.0).astype(float)
-
-    # Assets chart (simple line)
     df_plot["total_assets_float"] = pd.to_numeric(df_plot["total_assets"], errors="coerce").astype(float)
+
     chart_assets = (
         alt.Chart(df_plot)
         .mark_line()
         .encode(
             x=alt.X("Date:T", title="Date"),
             y=alt.Y("total_assets_float:Q", title=f"Total Assets ({asset_symbol})"),
-            tooltip=[
-                alt.Tooltip("Date:T"),
-                alt.Tooltip("total_assets_float:Q", title="Total Assets", format=",.2f")
-            ],
+            tooltip=[alt.Tooltip("Date:T"), alt.Tooltip("total_assets_float:Q", title="Total Assets", format=",.2f")],
         )
         .properties(height=300)
     )
     st.altair_chart(chart_assets, use_container_width=True)
 
-    # Dual-axis: cumulative total yield (left) & DAILY APY % (right)
-    color_yield = "#3B82F6"     # bright blue
-    color_apy   = "#1E40AF"     # darker blue
+    color_yield = "#3B82F6"
+    color_apy   = "#1E40AF"
 
     left = (
         alt.Chart(df_plot)
         .mark_line(stroke=color_yield, strokeWidth=2)
         .encode(
             x=alt.X("Date:T", title="Date"),
-            y=alt.Y(
-                "cum_yield:Q",
-                title=f"Total Yield ({asset_symbol})",
-                axis=alt.Axis(grid=True, titleColor=color_yield),
-            ),
-            tooltip=[
-                alt.Tooltip("Date:T"),
-                alt.Tooltip("cum_yield:Q", title="Total Yield", format=",.2f"),
-            ],
+            y=alt.Y("cum_yield:Q", title=f"Total Yield ({asset_symbol})",
+                    axis=alt.Axis(grid=True, titleColor=color_yield)),
+            tooltip=[alt.Tooltip("Date:T"), alt.Tooltip("cum_yield:Q", title="Total Yield", format=",.2f")],
         )
     )
-
     right = (
         alt.Chart(df_plot)
         .mark_line(stroke=color_apy, strokeDash=[4, 2], strokeWidth=2)
         .encode(
             x="Date:T",
-            y=alt.Y(
-                "daily_apy_pct:Q",
-                title="Daily APY (%)",
-                axis=alt.Axis(orient="right", titleColor=color_apy),
-            ),
-            tooltip=[
-                alt.Tooltip("Date:T"),
-                alt.Tooltip("daily_apy_pct:Q", title="Daily APY (%)", format=",.2f"),
-            ],
+            y=alt.Y("daily_apy_pct:Q", title="Daily APY (%)", axis=alt.Axis(orient="right", titleColor=color_apy)),
+            tooltip=[alt.Tooltip("Date:T"), alt.Tooltip("daily_apy_pct:Q", title="Daily APY (%)", format=",.2f")],
         )
     )
-
     chart_dual = (
         alt.layer(left, right)
         .resolve_scale(y="independent")
@@ -389,16 +361,13 @@ else:
             ),
         )
     )
-
     st.altair_chart(chart_dual, use_container_width=True)
 
-# ------- TABLE (formatted & clean) -------
+# ------- TABLE -------
 st.subheader("Daily metrics")
 
 if not df.empty:
     df_disp = df.sort_values("date", ascending=False).reset_index(drop=True)
-
-    # Build a formatted view DataFrame (no vault/markets columns)
     df_view = pd.DataFrame()
     df_view["Date"] = pd.to_datetime(df_disp["date"]).dt.strftime("%d-%m-%Y")
     df_view["Total Assets"]  = df_disp.apply(lambda r: f"{_to_dec(r['total_assets']):,.2f}", axis=1)
@@ -406,7 +375,6 @@ if not df.empty:
     df_view["Fee"]           = df_disp.apply(lambda r: f"{_to_dec(r['fee_amount']):.2f}", axis=1)
     df_view["APY"]           = df_disp.apply(lambda r: f"{(_to_dec(r['apy']) * 100):.2f}", axis=1)
     df_view["Yield Earned"]  = df_disp.apply(lambda r: f"{_to_dec(r['yield_earned']):,.2f}", axis=1)
-
     st.dataframe(df_view, use_container_width=True, hide_index=True)
 
 st.markdown(

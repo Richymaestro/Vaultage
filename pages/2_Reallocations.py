@@ -3,7 +3,6 @@ from datetime import datetime
 from decimal import Decimal, getcontext
 from typing import List, Dict, Any
 import os
-import json
 import requests
 import pandas as pd
 import pytz
@@ -11,17 +10,20 @@ import streamlit as st
 from hexbytes import HexBytes
 from web3 import Web3
 
+from src.auth import guard_other_pages, logout_button
 from src.chain import get_w3, checksum
-from streamlit_app import VAULTS  # reuse config & market ids
-from src.auth import require_login
-
-require_login()
+from src.app_config import VAULTS
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
 
 st.set_page_config(page_title="Reallocations", page_icon=None, layout="wide")
+
+# Guard (no form here). If not logged in, shows link back to home and stops.
+guard_other_pages()
+
 st.title("Reallocations Dashboard")
 st.caption("EOA → Zodiac Roles Modifier execs, gas costs (ETH & USD via Chainlink), and on-the-spot APY around each tx.")
 
@@ -37,42 +39,52 @@ st.markdown("""
 .summary-card{width:100%;background:radial-gradient(120% 120% at 0% 0%,#122042 0%,#0e1a36 100%);border:1px solid #233257;border-radius:16px;padding:14px 16px;box-shadow:0 6px 18px rgba(0,0,0,0.25);}
 .summary-card h4{margin:0 0 6px 0;color:#9fb3d8;font-size:.9rem;font-weight:600;letter-spacing:.3px;}
 .summary-card .val{font-size:1.35rem;font-weight:700;color:#eaf0fb;}
-[data-testid="stSidebarNav"] { display: none; }  /* hide default app/page list */
+[data-testid="stSidebarNav"] { display: none; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Config & routing ----------
+# ---------- Config & routing (session-based) ----------
 def slugify(name: str) -> str:
     return name.lower().replace("&","and").replace("/"," ").replace("_"," ").replace("-"," ").strip().replace(" ","-")
 
 ROUTES = {slugify(v["name"]): v for v in VAULTS}
+all_slugs = list(ROUTES.keys())
 
-def _normalize_slug_from_qp() -> str:
-    qp = st.query_params
-    if "vault" not in qp:
-        return next(iter(ROUTES))  # first slug
-    raw = str(qp["vault"]).strip()
-    low = raw.lower()
-    if low in ROUTES:
-        return low
-    guess = slugify(raw)
-    if guess in ROUTES:
-        return guess
-    return next(iter(ROUTES))
-
-current_slug = _normalize_slug_from_qp()
-
-# Sidebar with "data" + "EOA data"
-st.sidebar.title("Vaults")
-def _link(label: str, href: str, active: bool):
-    cls = "sidebar-link active" if active else "sidebar-link"
-    st.sidebar.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
-
-for slug, Vv in ROUTES.items():
-    _link(f"{Vv['name']} data", f"?vault={slug}", active=False)
-    _link(f"{Vv['name']} EOA data", f"Reallocations?vault={slug}", active=(slug == current_slug))
+current_slug = st.session_state.get("vault_slug", all_slugs[0] if all_slugs else None)
+if not current_slug or current_slug not in ROUTES:
+    current_slug = all_slugs[0] if all_slugs else None
+    st.session_state.vault_slug = current_slug
 
 V = ROUTES[current_slug]
+
+# Sidebar (buttons + switch_page)
+st.sidebar.title("Vaults")
+
+def _goto(target_page: str, slug: str):
+    st.session_state.vault_slug = slug
+    if target_page == "vault":
+        st.switch_page("pages/1_Vault.py")
+    else:
+        st.switch_page("pages/2_Reallocations.py")
+
+if st.sidebar.button("🏠 Overview", use_container_width=True):
+    st.switch_page("streamlit_app.py")
+
+for vv in VAULTS:
+    sg = slugify(vv["name"])
+    if st.sidebar.button(f"{vv['name']} data", use_container_width=True):
+        _goto("vault", sg)
+    if st.sidebar.button(f"{vv['name']} EOA data", use_container_width=True):
+        _goto("eoa", sg)
+
+logout_button()
+
+# ---------- Connections / addresses ----------
+try:
+    w3 = get_w3()
+except Exception as e:
+    st.error(f"Web3 error: {e}")
+    st.stop()
 
 vault_addr     = checksum(V["address"])
 allocator_eoa  = checksum(V["allocator_eoa"])
@@ -82,13 +94,6 @@ market_ids: List[str] = [HexBytes(mid).hex() for mid in V.get("market_ids", [])]
 
 st.subheader(V["name"])
 st.caption(f"Vault: `{vault_addr}` · Allocator EOA: `{allocator_eoa}` · Roles Modifier: `{roles_modifier}`")
-
-# ---------- Connections ----------
-try:
-    w3 = get_w3()
-except Exception as e:
-    st.error(f"Web3 error: {e}")
-    st.stop()
 
 # ---------- Minimal ABIs ----------
 MORPHO_ABI = [
@@ -141,7 +146,7 @@ IRM_ABI = [
      "name":"borrowRateView","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],
      "stateMutability":"view","type":"function"}
 ]
-# Chainlink ETH/USD AggregatorV3
+# Chainlink ETH/USD AggregatorV3 (mainnet)
 AGG_ABI = [
     {"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},
     {"inputs":[],"name":"latestRoundData","outputs":[
@@ -180,13 +185,13 @@ def _save_csv(path: str, df: pd.DataFrame) -> None:
     df.to_csv(tmp, index=False)
     os.replace(tmp, path)
 
-def _eth_usd_at_or_before(block_id: int) -> float:
-    """Return Chainlink ETH/USD price at the given block (hardcoded 8 decimals)."""
+def _eth_usd_at_block(block_id: int) -> float:
+    """Return Chainlink ETH/USD price at the given block (8 decimals)."""
     try:
         eth_usd = w3.eth.contract(address=ETH_USD_FEED, abi=AGG_ABI)
         rd = eth_usd.functions.latestRoundData().call(block_identifier=block_id)
         _, answer, _, _, _ = rd
-        return float(answer) / (10 ** 8)  # Chainlink ETH/USD = 8 decimals
+        return float(answer) / (10 ** 8)
     except Exception:
         return 0.0
 
@@ -263,7 +268,7 @@ def vault_apy_at_block(block_id: int, *, mids: List[str], vault: str) -> float:
 # ---------- Etherscan v2 (paginated) ----------
 EXEC_SELECTOR = Web3.keccak(
     text="execTransactionWithRole(address,uint256,bytes,uint8,bytes32,bool)"
-)[:4].to_0x_hex()   # keep as-is
+)[:4].to_0x_hex()
 
 @st.cache_data(ttl=300)
 def fetch_txs_to_all_pages(address: str) -> List[Dict[str, Any]]:
@@ -289,7 +294,7 @@ def fetch_txs_to_all_pages(address: str) -> List[Dict[str, Any]]:
     while True:
         p = dict(params)
         if next_token:
-            p["page"] = next_token  # Etherscan v2 pagination token
+            p["page"] = next_token
         r = requests.get(base, params=p, timeout=30)
         r.raise_for_status()
         j = r.json()
@@ -317,7 +322,7 @@ existing_hashes = set()
 if not df_all.empty and "Tx Hash" in df_all.columns:
     existing_hashes = set(str(x) for x in df_all["Tx Hash"].astype(str).tolist())
 
-# Determine last processed block (optional optimization)
+# Determine last processed block
 last_block_in_csv = 0
 if not df_all.empty and "Block" in df_all.columns:
     try:
@@ -328,7 +333,6 @@ if not df_all.empty and "Block" in df_all.columns:
 # ---------- Fetch & filter new txs ----------
 with st.spinner("Fetching allocator execs…"):
     all_txs = fetch_txs_to_all_pages(roles_modifier)
-
     txs = [
         t for t in all_txs
         if t.get("from", "").lower() == allocator_eoa.lower()
@@ -359,7 +363,7 @@ for t in txs:
     except Exception:
         gas_eth = 0.0
 
-    eth_usd = _eth_usd_at_or_before(blk)
+    eth_usd = _eth_usd_at_block(blk)
     gas_usd = gas_eth * eth_usd if eth_usd > 0 else 0.0
 
     # APY at blocks: before (blk-1) vs after (blk)
@@ -386,9 +390,8 @@ for t in txs:
         "APY Δ (pp)": apy_diff,
     }
 
-    # Append to df_all and persist immediately
+    # Append & persist immediately
     df_all = pd.concat([df_all, pd.DataFrame([row])], ignore_index=True)
-    # Keep CSV tidy & unique as we go
     df_all = df_all.drop_duplicates(subset=["Tx Hash"]).sort_values("Block", ascending=True).reset_index(drop=True)
     _save_csv(csv_path, df_all)
     existing_hashes.add(tx_hash)
