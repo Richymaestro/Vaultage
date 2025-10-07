@@ -10,6 +10,8 @@ import streamlit as st
 from src.storage import load_csv
 from src.chain import checksum
 from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS  # keep your config here
+from src.auth import require_login
+require_login()
 
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
