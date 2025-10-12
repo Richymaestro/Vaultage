@@ -9,24 +9,15 @@ import streamlit as st
 import altair as alt
 from web3 import Web3
 
-# Optional guard (keeps page standalone; remove try/except to make it required)
-try:
-    from src.auth import guard_other_pages, logout_button
-    AUTH_AVAILABLE = True
-except Exception:
-    AUTH_AVAILABLE = False
-
-# We read chain & snapshots directly
+from src.auth import guard_other_pages, logout_button
 from src.chain import get_w3, checksum, find_block_at_or_before_timestamp
 from src.erc4626 import read_vault_snapshot
 
+guard_other_pages()
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
 
 st.set_page_config(page_title="Comparisons — APYs", page_icon=None, layout="wide")
-
-if AUTH_AVAILABLE:
-    guard_other_pages()
 
 # ----------------------------
 # Configure here (standalone)
@@ -35,8 +26,6 @@ COMPARISON_START_DATE = date(2025, 9, 1)          # inclusive
 SNAPSHOT_LOCAL_TIME   = dtime(12, 0, 0)           # daily snapshot time (Europe/Amsterdam)
 COMPARISON_CSV_PATH   = os.path.join("data", "apy_comparisons.csv")
 
-# Add/remove vaults here (standalone list).
-# Only 'name' and 'address' are required. 'note' is optional for your own labeling.
 VAULTS = [
     {"name": "Morpho USDC Prime",   "address": "0xe108fbc04852B5df72f9E44d7C29F47e7A993aDd", "note": "USDC"},
     {"name": "Morpho USDT Yield",   "address": "0xd4e95092a8f108728c49f32A30f30556896563b5", "note": "USDT"},
@@ -48,7 +37,6 @@ VAULTS = [
     {"name": "Gauntlet USDT Prime", "address": "0x8CB3649114051cA5119141a34C200D65dc0Faa73", "note": "USDT"},
     {"name": "Smokehouse USDT",     "address": "0xA0804346780b4c2e3bE118ac957D1DB82F9d7484", "note": "USDT"},
     {"name": "Gauntlet EURC Core",  "address": "0x2ed10624315b74a78f11FAbedAa1A228c198aEfB", "note": "EURC"},
-    # Add more vaults freely
 ]
 
 # ----------------------------
@@ -62,8 +50,6 @@ st.markdown("""
 }
 [data-testid="stSidebar"] { background:#0a0f1d; border-right:1px solid #1f2a44; }
 [data-testid="stSidebarNav"] { display:none; }
-
-/* Cards / boxes */
 .card {
   width: 100%;
   background: radial-gradient(120% 120% at 0% 0%, #122042 0%, #0e1a36 100%);
@@ -87,12 +73,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# Sidebar (minimal, standalone)
+# Sidebar (standalone)
 # ----------------------------
 st.sidebar.title("Comparisons")
 st.sidebar.markdown("<div class='sidebar-link active'>APY Comparisons</div>", unsafe_allow_html=True)
-if AUTH_AVAILABLE:
-    logout_button()
+st.sidebar.divider()
+logout_button()
 
 # ----------------------------
 # Helpers
@@ -182,8 +168,6 @@ for v in VAULTS:
         continue
 
     # Fetch sequentially so we can reuse yesterday's share price
-    # First compute SP at (begin - 1), so the first day APY can be calculated
-    # If begin == COMPARISON_START_DATE, we still try (start-1); if it fails, first day APY = 0
     prev_day = begin - timedelta(days=1)
     prev_sp  = None
     try:
@@ -201,17 +185,14 @@ for v in VAULTS:
         try:
             block = find_block_at_or_before_timestamp(w3, ts)
             snap  = read_vault_snapshot(w3, addr, block_identifier=block)
-        except Exception as e:
-            # skip this day if snapshot fails
+        except Exception:
             d += timedelta(days=1)
             continue
 
-        # Pull share price & underlying
         sp = _to_dec(snap.get("share_price", 0))
         asset_symbol = (snap.get("asset_symbol") or "").strip()
         underlying = _underlying_from(name, asset_symbol)
 
-        # Compute daily APY from share price change vs previous day
         if prev_sp and prev_sp > 0 and sp > 0:
             daily_ret = (sp - prev_sp) / prev_sp
             apy = (Decimal(1) + daily_ret) ** Decimal(365) - Decimal(1)
@@ -228,7 +209,6 @@ for v in VAULTS:
                 "underlying_token": underlying,
                 "daily_apy_pct": daily_apy_pct,
             }
-            # Append & persist immediately so partial progress survives interruptions
             df_comp = pd.concat([df_comp, pd.DataFrame([row])], ignore_index=True)
             df_comp = (
                 df_comp.drop_duplicates(subset=["date","vault_address"])
@@ -238,7 +218,6 @@ for v in VAULTS:
             _save_comparisons_csv(df_comp)
             existing_keys.add(key)
 
-        # roll prev_sp for next day
         prev_sp = sp
         d += timedelta(days=1)
 
@@ -277,13 +256,11 @@ for u in underlyings:
         st.caption("No data for this token yet.")
         continue
 
-    # Pivot: rows = date, cols = vault_name, value = daily_apy_pct
     pivot = df_u.pivot_table(
         index="date", columns="vault_name", values="daily_apy_pct", aggfunc="mean"
     ).sort_index()
     pivot = pivot.reindex(sorted(pivot.columns), axis=1)
 
-    # Show table (format as % with 2 decimals)
     disp = pivot.copy()
     for c in disp.columns:
         disp[c] = disp[c].map(lambda x: f"{x:.2f}%" if pd.notnull(x) else "")
@@ -291,7 +268,6 @@ for u in underlyings:
     st.dataframe(disp, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Long form for Altair
     long = pivot.reset_index().melt(
         id_vars="date", var_name="vault_name", value_name="daily_apy_pct"
     ).dropna()

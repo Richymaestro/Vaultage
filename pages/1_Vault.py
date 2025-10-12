@@ -130,9 +130,9 @@ if st.sidebar.button("🏠 Overview", use_container_width=True):
 
 for v in VAULTS:
     s = _slug(v["name"])
-    if st.sidebar.button(f"{v['name']} data", use_container_width=True):
+    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{s}"):
         _goto("vault", s)
-    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True):
+    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{s}"):
         _goto("eoa", s)
 
 logout_button()
@@ -467,7 +467,6 @@ if not df.empty:
     df_view["Fee"]           = df_disp.apply(lambda r: f"{_to_dec(r['fee_amount']):.2f}", axis=1)
     df_view["APY"]           = df_disp.apply(lambda r: f"{(_to_dec(r['apy']) * 100):.2f}", axis=1)
     df_view["Yield Earned"]  = df_disp.apply(lambda r: f"{_to_dec(r['yield_earned']):,.2f}", axis=1)
-    # NEW columns in table
     if "deposits" in df_disp.columns:
         df_view["Deposits"]  = df_disp.apply(lambda r: f"{_to_dec(r.get('deposits', 0)):,.2f}", axis=1)
     if "withdraws" in df_disp.columns:

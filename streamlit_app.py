@@ -12,6 +12,8 @@ from src.chain import checksum
 from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS
 from src.auth import require_login_on_home, logout_button
 
+require_login_on_home()
+
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
 
@@ -86,10 +88,7 @@ h1, h2, h3, h4 { color: #e6e9ef; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- Login gate (home only; stops if not authed) ----------------
-require_login_on_home()
-
-# ---------- Sidebar: Overview + per-vault pages (same tab via links) ----------
+# ---------- Helpers ----------
 def slugify(name: str) -> str:
     return (
         name.lower()
@@ -101,28 +100,6 @@ def slugify(name: str) -> str:
         .replace(" ", "-")
     )
 
-def _sbar_link(label: str, href: str, active: bool = False):
-    cls = "sidebar-link active" if active else "sidebar-link"
-    st.sidebar.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
-
-st.sidebar.title("Vaults")
-# Home link (you are here)
-_sbar_link("🏠 Overview", "?", active=True)
-
-# Optional: Comparisons page (if you added pages/3_Comparisons.py)
-_sbar_link("📊 Comparisons", "Comparisons", active=False)
-
-# Per-vault links
-for v in VAULTS:
-    slug = slugify(v["name"])
-    _sbar_link(f"{v['name']} data", f"Vault?vault={slug}", active=False)
-    _sbar_link(f"{v['name']} EOA data", f"Reallocations?vault={slug}", active=False)
-
-# Logout at the bottom
-st.sidebar.divider()
-logout_button()
-
-# ---------- Helpers ----------
 def _to_dec(x, default=Decimal(0)):
     try:
         return Decimal(str(x))
@@ -207,6 +184,33 @@ def _summary_for_vault(v):
         "eoa_gas_usd": eoa_gas_usd,
     }
 
+# ---------- Sidebar: buttons that keep session (no anchor links) ----------
+ROUTES = {slugify(v["name"]): v for v in VAULTS}
+st.sidebar.title("Vaults")
+
+def _goto(page_py: str, slug: str | None = None):
+    if slug is not None:
+        st.session_state.vault_slug = slug
+    st.switch_page(page_py)
+
+# Home (you are here)
+st.sidebar.markdown('<div class="sidebar-link active">🏠 Overview</div>', unsafe_allow_html=True)
+
+# Comparisons page button (uses switch_page)
+if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-comparisons"):
+    _goto("pages/3_Comparisons.py")
+
+# Per-vault buttons
+for v in VAULTS:
+    slug = slugify(v["name"])
+    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{slug}"):
+        _goto("pages/1_Vault.py", slug)
+    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{slug}"):
+        _goto("pages/2_Reallocations.py", slug)
+
+st.sidebar.divider()
+logout_button()
+
 # ---------- Page header ----------
 st.header("Morpho Vaults — Overview")
 st.caption(f"Start date (per-vault CSV): {START_DATE}. Select a vault from the sidebar or use the buttons below.")
@@ -234,9 +238,13 @@ else:
             """, unsafe_allow_html=True)
 
             slug = slugify(v["name"])
-            # Same-tab links
-            st.markdown(f'<a class="sidebar-link" href="Vault?vault={slug}">Open data →</a>', unsafe_allow_html=True)
-            st.markdown(f'<a class="sidebar-link" href="Reallocations?vault={slug}">Open EOA data →</a>', unsafe_allow_html=True)
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Open data →", key=f"card-data-{slug}", use_container_width=True):
+                    _goto("pages/1_Vault.py", slug)
+            with b2:
+                if st.button("Open EOA data →", key=f"card-eoa-{slug}", use_container_width=True):
+                    _goto("pages/2_Reallocations.py", slug)
 
 st.markdown(
     '<p class="small-note">Overview reads per-vault CSVs in <code>data/</code> and the EOA CSVs '
