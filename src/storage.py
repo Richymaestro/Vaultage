@@ -49,6 +49,8 @@ def append_or_update_today(
     asset_symbol: str,
     vault_address: str,
     markets: List[str],
+    deposits: Decimal = Decimal(0),
+    withdraws: Decimal = Decimal(0),
 ) -> pd.DataFrame:
     row = {
         "date": date_str,
@@ -60,6 +62,8 @@ def append_or_update_today(
         "asset_symbol": asset_symbol,
         "vault_address": vault_address,
         "markets": ",".join([m.strip() for m in markets if m.strip()]),
+        "deposits": float(deposits),
+        "withdraws": float(withdraws),
     }
     if (df["date"] == date_str).any():
         df.loc[df["date"] == date_str, :] = row

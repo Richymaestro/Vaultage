@@ -14,6 +14,8 @@ from src.fees import get_fee_amount_for_day
 from src.storage import load_csv, save_csv, append_or_update_today, latest_date
 from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS
 
+from web3 import Web3
+
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
 
@@ -152,6 +154,36 @@ except Exception as e:
     st.error(f"Invalid address for {active_vault['name']}: {e}")
     st.stop()
 
+# ------- Minimal ABIs for event scanning / decimals -------
+ERC4626_ABI_MIN = [
+    {"inputs":[],"name":"asset","outputs":[{"internalType":"address","name":"","type":"address"}],
+     "stateMutability":"view","type":"function"}
+]
+ERC20_ABI_MIN = [
+    {"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],
+     "stateMutability":"view","type":"function"}
+]
+
+vault_contract = w3.eth.contract(address=vault_addr, abi=ERC4626_ABI_MIN)
+
+def _asset_address() -> str:
+    try:
+        return vault_contract.functions.asset().call()
+    except Exception:
+        return "0x0000000000000000000000000000000000000000"
+
+_ASSET_ADDR = _asset_address()
+def _asset_decimals() -> int:
+    try:
+        if _ASSET_ADDR == "0x0000000000000000000000000000000000000000":
+            return 18
+        erc20 = w3.eth.contract(address=checksum(_ASSET_ADDR), abi=ERC20_ABI_MIN)
+        return int(erc20.functions.decimals().call())
+    except Exception:
+        return 18
+
+_ASSET_DECS = _asset_decimals()
+
 # ------- CSV load & incremental backfill -------
 df = load_csv(vault_addr)
 
@@ -167,6 +199,58 @@ if last:
         begin = start_dt
 else:
     begin = start_dt
+
+# ----- Helpers for event sums (Deposit / Withdraw) -----
+# Topics (event signatures)
+TOPIC_DEPOSIT  = Web3.keccak(text="Deposit(address,address,uint256,uint256)").to_0x_hex()
+TOPIC_WITHDRAW = Web3.keccak(text="Withdraw(address,address,address,uint256,uint256)").to_0x_hex()
+
+def _blocks_for_day(since_ts: int, until_ts: int) -> tuple[int, int]:
+    """Map day window timestamps to a block range [from_block, to_block]."""
+    try:
+        from_block = find_block_at_or_before_timestamp(w3, since_ts)
+    except Exception:
+        from_block = "earliest"
+    try:
+        to_block = find_block_at_or_before_timestamp(w3, until_ts)
+    except Exception:
+        to_block = "latest"
+    return from_block, to_block
+
+def _sum_event_assets(topic0: str, from_block, to_block) -> Decimal:
+    """Low-level log scan: sum `assets` (first uint256 in data) for matching events."""
+    try:
+        logs = w3.eth.get_logs({
+            "fromBlock": from_block,
+            "toBlock": to_block,
+            "address": vault_addr,
+            "topics": [topic0],
+        })
+    except Exception:
+        return Decimal(0)
+
+    total = Decimal(0)
+    for lg in logs:
+        data = lg.get("data", "").to_0x_hex()
+        if not (isinstance(data, str) and data.startswith("0x")):
+            continue
+        # data encodes: assets (uint256) then shares (uint256), each 32 bytes
+        hexdata = data[2:].rjust(64*2, "0")  # pad just in case
+        try:
+            assets_hex = hexdata[0:64]
+            assets_int = int(assets_hex, 16)
+            total += Decimal(assets_int)
+        except Exception:
+            continue
+    # convert to token units by decimals
+    return total / (Decimal(10) ** _ASSET_DECS)
+
+def get_deposits_withdraws_for_day(since_ts: int, until_ts: int) -> tuple[Decimal, Decimal]:
+    """Return (deposits, withdraws) token amounts aggregated for the day."""
+    from_block, to_block = _blocks_for_day(since_ts, until_ts)
+    deposits  = _sum_event_assets(TOPIC_DEPOSIT,  from_block, to_block)
+    withdraws = _sum_event_assets(TOPIC_WITHDRAW, from_block, to_block)
+    return deposits, withdraws
 
 # Incrementally fill from latest CSV -> today
 if begin <= today_local:
@@ -200,14 +284,20 @@ if begin <= today_local:
             st.warning(f"{date_str}: snapshot failed at block {block_id} → {e}")
             continue
 
-        asset_symbol = snap["asset_symbol"] or "ASSET"
+        asset_symbol = snap.get("asset_symbol") or "ASSET"
         total_assets = snap["total_assets"]
-        share_price = snap["share_price"]
+        share_price  = snap["share_price"]
         total_supply = snap["total_supply"]
 
         fee_amount = get_fee_amount_for_day(
             w3=w3, vault_addr=vault_addr, since_ts=since_ts, until_ts=until_ts
         )
+
+        # NEW: daily deposits / withdraws
+        try:
+            deposits, withdraws = get_deposits_withdraws_for_day(since_ts, until_ts)
+        except Exception:
+            deposits, withdraws = Decimal(0), Decimal(0)
 
         # Compute APY / yield vs previous stored row
         apy = Decimal(0)
@@ -220,7 +310,7 @@ if begin <= today_local:
                 apy = (Decimal(1) + daily_ret) ** Decimal(365) - Decimal(1)
                 yield_earned = (share_price - prev_sp) * total_supply
 
-        # Upsert CSV row & persist incrementally
+        # Upsert CSV row & persist incrementally (now with deposits/withdraws)
         df = append_or_update_today(
             df,
             date_str=date_str,
@@ -232,6 +322,8 @@ if begin <= today_local:
             asset_symbol=asset_symbol,
             vault_address=vault_addr,
             markets=active_vault.get("markets", []),
+            deposits=deposits,
+            withdraws=withdraws,
         )
         save_csv(vault_addr, df)
         progress.progress((i + 1) / days, text=f"Updating CSV… {date_str} (block {block_id})")
@@ -369,16 +461,23 @@ st.subheader("Daily metrics")
 if not df.empty:
     df_disp = df.sort_values("date", ascending=False).reset_index(drop=True)
     df_view = pd.DataFrame()
-    df_view["Date"] = pd.to_datetime(df_disp["date"]).dt.strftime("%d-%m-%Y")
+    df_view["Date"]          = pd.to_datetime(df_disp["date"]).dt.strftime("%d-%m-%Y")
     df_view["Total Assets"]  = df_disp.apply(lambda r: f"{_to_dec(r['total_assets']):,.2f}", axis=1)
     df_view["Share Price"]   = df_disp.apply(lambda r: f"{_to_dec(r['share_price']):.4f}", axis=1)
     df_view["Fee"]           = df_disp.apply(lambda r: f"{_to_dec(r['fee_amount']):.2f}", axis=1)
     df_view["APY"]           = df_disp.apply(lambda r: f"{(_to_dec(r['apy']) * 100):.2f}", axis=1)
     df_view["Yield Earned"]  = df_disp.apply(lambda r: f"{_to_dec(r['yield_earned']):,.2f}", axis=1)
+    # NEW columns in table
+    if "deposits" in df_disp.columns:
+        df_view["Deposits"]  = df_disp.apply(lambda r: f"{_to_dec(r.get('deposits', 0)):,.2f}", axis=1)
+    if "withdraws" in df_disp.columns:
+        df_view["Withdraws"] = df_disp.apply(lambda r: f"{_to_dec(r.get('withdraws', 0)):,.2f}", axis=1)
+
     st.dataframe(df_view, use_container_width=True, hide_index=True)
 
 st.markdown(
     '<p class="small-note">CSV is stored per-vault in <code>data/</code>. '
+    'Daily rows now include <code>deposits</code> and <code>withdraws</code> summed from ERC-4626 events. '
     'The app resumes from the latest stored date to today on refresh. '
     'Dates are shown as DD-MM-YYYY; CSV keeps ISO for sorting.</p>',
     unsafe_allow_html=True

@@ -9,10 +9,8 @@ import streamlit as st
 
 from src.storage import load_csv
 from src.chain import checksum
-from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS  # keep your config here
+from src.app_config import START_DATE, SNAPSHOT_LOCAL_TIME, VAULTS
 from src.auth import require_login_on_home, logout_button
-
-require_login_on_home()
 
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
@@ -88,7 +86,10 @@ h1, h2, h3, h4 { color: #e6e9ef; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Sidebar: Overview + per-vault pages (same tab via session+switch_page) ----------
+# ---------------- Login gate (home only; stops if not authed) ----------------
+require_login_on_home()
+
+# ---------- Sidebar: Overview + per-vault pages (same tab via links) ----------
 def slugify(name: str) -> str:
     return (
         name.lower()
@@ -100,29 +101,25 @@ def slugify(name: str) -> str:
         .replace(" ", "-")
     )
 
-ROUTES = {slugify(v["name"]): v for v in VAULTS}
-all_slugs = list(ROUTES.keys())
-
-# initialize selected slug if absent
-if "vault_slug" not in st.session_state:
-    st.session_state.vault_slug = all_slugs[0] if all_slugs else None
+def _sbar_link(label: str, href: str, active: bool = False):
+    cls = "sidebar-link active" if active else "sidebar-link"
+    st.sidebar.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
 
 st.sidebar.title("Vaults")
+# Home link (you are here)
+_sbar_link("🏠 Overview", "?", active=True)
 
-def _goto(target_page: str, slug: str):
-    st.session_state.vault_slug = slug
-    if target_page == "vault":
-        st.switch_page("pages/1_Vault.py")
-    else:
-        st.switch_page("pages/2_Reallocations.py")
+# Optional: Comparisons page (if you added pages/3_Comparisons.py)
+_sbar_link("📊 Comparisons", "Comparisons", active=False)
 
+# Per-vault links
 for v in VAULTS:
     slug = slugify(v["name"])
-    if st.sidebar.button(f"{v['name']} data", use_container_width=True):
-        _goto("vault", slug)
-    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True):
-        _goto("eoa", slug)
+    _sbar_link(f"{v['name']} data", f"Vault?vault={slug}", active=False)
+    _sbar_link(f"{v['name']} EOA data", f"Reallocations?vault={slug}", active=False)
 
+# Logout at the bottom
+st.sidebar.divider()
 logout_button()
 
 # ---------- Helpers ----------
@@ -136,8 +133,8 @@ def _realloc_csv_path(vault_addr_checksum: str) -> str:
     os.makedirs("data", exist_ok=True)
     return os.path.join("data", f"reallocations_{vault_addr_checksum.lower()}.csv")
 
-def _load_realloc_csv(vault_addr_checksum: str) -> pd.DataFrame:
-    path = _realloc_csv_path(vault_addr_checksum)
+def _load_realloc_csv(vaddr_cs: str) -> pd.DataFrame:
+    path = _realloc_csv_path(vaddr_cs)
     if os.path.exists(path):
         try:
             return pd.read_csv(path)
@@ -147,11 +144,10 @@ def _load_realloc_csv(vault_addr_checksum: str) -> pd.DataFrame:
 
 def _summary_for_vault(v):
     """Return dict with summary metrics for dashboard cards, incl. EOA summary."""
-    # Main data CSV (daily)
     try:
         addr = checksum(v["address"])
     except Exception:
-        addr = v["address"]  # best effort fallback
+        addr = v["address"]
 
     df = load_csv(addr)
     if df.empty:
@@ -184,7 +180,6 @@ def _summary_for_vault(v):
         latest_sp     = _to_dec(latest["share_price"])
         total_yield_cum = df_sorted["yield_earned"].apply(_to_dec).sum()
 
-    # EOA (reallocations) CSV
     try:
         vaddr_cs = checksum(v["address"])
     except Exception:
@@ -239,13 +234,9 @@ else:
             """, unsafe_allow_html=True)
 
             slug = slugify(v["name"])
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button("Open data →", key=f"card-data-{slug}", use_container_width=True):
-                    _goto("vault", slug)
-            with b2:
-                if st.button("Open EOA data →", key=f"card-eoa-{slug}", use_container_width=True):
-                    _goto("eoa", slug)
+            # Same-tab links
+            st.markdown(f'<a class="sidebar-link" href="Vault?vault={slug}">Open data →</a>', unsafe_allow_html=True)
+            st.markdown(f'<a class="sidebar-link" href="Reallocations?vault={slug}">Open EOA data →</a>', unsafe_allow_html=True)
 
 st.markdown(
     '<p class="small-note">Overview reads per-vault CSVs in <code>data/</code> and the EOA CSVs '

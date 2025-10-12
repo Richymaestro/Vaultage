@@ -1,113 +1,73 @@
 # src/auth.py
 import os
-import hashlib
 import streamlit as st
 
-try:
-    # optional: load .env automatically if python-dotenv is installed
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+PASSWORD_ENV = "APP_PASSWORD"
 
-# ---------------------------
-# ENV KEYS (all optional)
-# ---------------------------
-# DISABLE_AUTH=1                     -> bypass login (handy for local dev)
-# APP_USER=admin                     -> username
-# APP_PASS=supersecret               -> password (plain), OR:
-# APP_PASS=sha256$<hex>              -> password as SHA256 hash
-# AUTH_TOKEN=some-long-token         -> enables magic link: ?token=some-long-token
+def _is_protected() -> bool:
+    """Auth is enabled only if APP_PASSWORD is set and non-empty."""
+    pw = os.getenv(PASSWORD_ENV, "")
+    return bool(str(pw).strip())
 
-def _bypass_enabled() -> bool:
-    raw = os.getenv("DISABLE_AUTH", "0")
-    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+def is_authed() -> bool:
+    """True if either auth disabled OR session has authed=True."""
+    if not _is_protected():
+        return True
+    return bool(st.session_state.get("authed", False))
 
-def _check_user_pass(user: str, pw: str) -> bool:
-    eu = os.getenv("APP_USER")
-    ep = os.getenv("APP_PASS")
-    if not eu or not ep:
-        # No creds configured -> lock down by default unless auth bypassed
-        return False
+def check_password(pw_input: str) -> bool:
+    """Compare against APP_PASSWORD from .env/env."""
+    pw = os.getenv(PASSWORD_ENV, "")
+    return bool(pw) and (str(pw_input) == str(pw))
 
-    if user != eu:
-        return False
-
-    stored = str(ep)
-    if stored.startswith("sha256$"):
-        h = hashlib.sha256(pw.encode()).hexdigest()
-        return h == stored.split("$", 1)[1]
-    return pw == stored
-
-def _check_token(tok: str) -> bool:
-    t = os.getenv("AUTH_TOKEN", "")
-    return bool(t) and tok == t
-
-# ---------------------------
-# Entry-page gate (shows form ONCE)
-# ---------------------------
-def require_login_on_home() -> bool:
+def require_login_on_home():
     """
-    Call this ONLY in streamlit_app.py (home).
-    Auth is ON by default. Locally you can set DISABLE_AUTH=1 to bypass.
+    Call this at the TOP of streamlit_app.py (after set_page_config ok too).
+    If not authed, RENDER an inline login form here and stop the script.
+    This prevents any page-switch loops.
     """
-    if _bypass_enabled():
-        st.session_state.logged_in = True
-        st.session_state.username = "local"
-        return True
+    if is_authed():
+        return
 
-    # Magic link via ?token=...
-    qp = st.query_params
-    tok = qp.get("token")
-    if isinstance(tok, list):  # older streamlit might return list
-        tok = tok[0] if tok else None
-    if tok and _check_token(str(tok)):
-        st.session_state.logged_in = True
-        st.session_state.username = "token"
-        return True
+    st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] { background: linear-gradient(180deg,#0b1020 0%,#0e1426 100%); color:#e6e9ef; }
+.login-card { background:#0e1a36; border:1px solid #233257; border-radius:16px; padding:24px; max-width:420px; margin:10vh auto; }
+.login-card h2 { margin:0 0 12px; }
+</style>
+""", unsafe_allow_html=True)
 
-    if st.session_state.get("logged_in"):
-        return True
-
-    st.markdown("## 🔒 Login")
-    with st.form("login_form", clear_on_submit=False):
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
-        ok = st.form_submit_button("Sign in")
-
-    if ok:
-        if _check_user_pass(u, p):
-            st.session_state.logged_in = True
-            st.session_state.username = u
-            st.rerun()
-        else:
-            st.error("Invalid credentials")
-
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
+    st.header("Sign in")
+    with st.form("login"):
+        pw = st.text_input("Password", type="password", help="Set APP_PASSWORD in your environment (.env).")
+        submitted = st.form_submit_button("Log in", use_container_width=True)
+        if submitted:
+            if check_password(pw):
+                st.session_state["authed"] = True
+                st.success("Welcome!")
+                st.rerun()
+            else:
+                st.error("Invalid password.")
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# ---------------------------
-# Other pages (no form)
-# ---------------------------
 def guard_other_pages():
     """
-    Call this at the top of every subpage (pages/*.py).
-    If not logged in, show a link back to home and stop.
+    Use this at the top of pages/* (Vault, Reallocations, Comparisons).
+    If not authed, DO NOT redirect. Just show a small notice linking back home and stop.
+    This avoids ping-pong loops.
     """
-    if _bypass_enabled():
-        return True
-    if st.session_state.get("logged_in"):
-        return True
-
-    st.markdown("### 🔒 Please log in")
-    st.info("Sign in on the homepage first.")
-    st.markdown('<a class="sidebar-link" href="?">Go to Login</a>', unsafe_allow_html=True)
+    if is_authed():
+        return
+    st.warning("🔒 Please log in on the homepage first.")
+    st.markdown('[Go to homepage →](?)')
     st.stop()
 
-# ---------------------------
-# Logout button (optional)
-# ---------------------------
 def logout_button():
-    if st.sidebar.button("Log out"):
-        for k in ("logged_in", "username"):
-            st.session_state.pop(k, None)
+    """Place this in the sidebar. Clears session and reloads home."""
+    if st.sidebar.button("Log out", use_container_width=True):
+        for k in ("authed",):
+            if k in st.session_state:
+                del st.session_state[k]
         st.rerun()
