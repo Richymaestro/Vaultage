@@ -124,10 +124,13 @@ def _goto(target_page: str, s: str):
     else:
         st.switch_page("pages/2_Reallocations.py")
 
-# Overview button
-if st.sidebar.button("🏠 Overview", use_container_width=True):
+# Overview + Comparisons
+if st.sidebar.button("🏠 Overview", use_container_width=True, key="sb-home"):
     st.switch_page("streamlit_app.py")
+if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-comparisons"):
+    st.switch_page("pages/3_Comparisons.py")
 
+# Per-vault links
 for v in VAULTS:
     s = _slug(v["name"])
     if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{s}"):

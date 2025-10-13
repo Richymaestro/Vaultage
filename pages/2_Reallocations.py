@@ -67,14 +67,18 @@ def _goto(target_page: str, slug: str):
     else:
         st.switch_page("pages/2_Reallocations.py")
 
-if st.sidebar.button("🏠 Overview", use_container_width=True):
+# Overview + Comparisons
+if st.sidebar.button("🏠 Overview", use_container_width=True, key="sb-home"):
     st.switch_page("streamlit_app.py")
+if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-comparisons"):
+    st.switch_page("pages/3_Comparisons.py")
 
+# Per-vault links
 for vv in VAULTS:
     sg = slugify(vv["name"])
-    if st.sidebar.button(f"{vv['name']} data", use_container_width=True):
+    if st.sidebar.button(f"{vv['name']} data", use_container_width=True, key=f"sb-data-{sg}"):
         _goto("vault", sg)
-    if st.sidebar.button(f"{vv['name']} EOA data", use_container_width=True):
+    if st.sidebar.button(f"{vv['name']} EOA data", use_container_width=True, key=f"sb-eoa-{sg}"):
         _goto("eoa", sg)
 
 logout_button()

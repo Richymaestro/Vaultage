@@ -13,6 +13,9 @@ from src.auth import guard_other_pages, logout_button
 from src.chain import get_w3, checksum, find_block_at_or_before_timestamp
 from src.erc4626 import read_vault_snapshot
 
+# Import your app-wide vault list for sidebar navigation (keeps menu consistent)
+from src.app_config import VAULTS as APP_VAULTS
+
 guard_other_pages()
 getcontext().prec = 50
 TZ = pytz.timezone("Europe/Amsterdam")
@@ -20,17 +23,18 @@ TZ = pytz.timezone("Europe/Amsterdam")
 st.set_page_config(page_title="Comparisons — APYs", page_icon=None, layout="wide")
 
 # ----------------------------
-# Configure here (standalone)
+# Configure here (standalone for comparisons data)
 # ----------------------------
 COMPARISON_START_DATE = date(2025, 9, 1)          # inclusive
 SNAPSHOT_LOCAL_TIME   = dtime(12, 0, 0)           # daily snapshot time (Europe/Amsterdam)
 COMPARISON_CSV_PATH   = os.path.join("data", "apy_comparisons.csv")
 
+# Standalone list for which vaults to compare (can differ from APP_VAULTS)
 VAULTS = [
-    {"name": "Morpho USDC Prime",   "address": "0xe108fbc04852B5df72f9E44d7C29F47e7A993aDd", "note": "USDC"},
-    {"name": "Morpho USDT Yield",   "address": "0xd4e95092a8f108728c49f32A30f30556896563b5", "note": "USDT"},
-    {"name": "Morpho EURC Yield",   "address": "0x0c6aec603d48eBf1cECc7b247a2c3DA08b398DC1", "note": "EURC"},
-    {"name": "Stakehouse USDC",     "address": "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB", "note": "USDC"},
+    {"name": "kpk USDC Prime",      "address": "0xe108fbc04852B5df72f9E44d7C29F47e7A993aDd", "note": "USDC"},
+    {"name": "kpk USDT Yield",      "address": "0xd4e95092a8f108728c49f32A30f30556896563b5", "note": "USDT"},
+    {"name": "kpk EURC Yield",      "address": "0x0c6aec603d48eBf1cECc7b247a2c3DA08b398DC1", "note": "EURC"},
+    {"name": "Steakhouse USDC",     "address": "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB", "note": "USDC"},
     {"name": "Gauntlet USDC Prime", "address": "0xdd0f28e19C1780eb6396170735D45153D261490d", "note": "USDC"},
     {"name": "Smokehouse USDC",     "address": "0xBEeFFF209270748ddd194831b3fa287a5386f5bC", "note": "USDC"},
     {"name": "Steakhouse USDT",     "address": "0xbEef047a543E45807105E51A8BBEFCc5950fcfBa", "note": "USDT"},
@@ -73,10 +77,37 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# Sidebar (standalone)
+# Sidebar (complete menu, consistent with other pages)
 # ----------------------------
-st.sidebar.title("Comparisons")
-st.sidebar.markdown("<div class='sidebar-link active'>APY Comparisons</div>", unsafe_allow_html=True)
+def _slug(name: str) -> str:
+    return (
+        name.lower()
+        .replace("&", "and").replace("/", " ").replace("_", " ").replace("-", " ")
+        .strip().replace(" ", "-")
+    )
+
+st.sidebar.title("Vaults")
+
+# Home
+if st.sidebar.button("🏠 Overview", use_container_width=True, key="sb-home"):
+    st.switch_page("streamlit_app.py")
+
+# Comparisons (active)
+st.sidebar.markdown('<div class="sidebar-link active">📊 Comparisons</div>', unsafe_allow_html=True)
+
+# Per-vault links (use app_config list for navigation consistency)
+def _goto(page_py: str, slug: str | None = None):
+    if slug is not None:
+        st.session_state.vault_slug = slug
+    st.switch_page(page_py)
+
+for v in APP_VAULTS:
+    s = _slug(v["name"])
+    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{s}"):
+        _goto("pages/1_Vault.py", s)
+    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{s}"):
+        _goto("pages/2_Reallocations.py", s)
+
 st.sidebar.divider()
 logout_button()
 
@@ -256,11 +287,13 @@ for u in underlyings:
         st.caption("No data for this token yet.")
         continue
 
+    # Pivot table with latest date on top
     pivot = df_u.pivot_table(
         index="date", columns="vault_name", values="daily_apy_pct", aggfunc="mean"
-    ).sort_index()
+    ).sort_index(ascending=False)   # <<< newest first
     pivot = pivot.reindex(sorted(pivot.columns), axis=1)
 
+    # Show table (format as % with 2 decimals)
     disp = pivot.copy()
     for c in disp.columns:
         disp[c] = disp[c].map(lambda x: f"{x:.2f}%" if pd.notnull(x) else "")
@@ -268,7 +301,8 @@ for u in underlyings:
     st.dataframe(disp, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    long = pivot.reset_index().melt(
+    # Long form for chart (chart will handle time on X; keep chronological order)
+    long = pivot.sort_index(ascending=True).reset_index().melt(
         id_vars="date", var_name="vault_name", value_name="daily_apy_pct"
     ).dropna()
     if long.empty:
