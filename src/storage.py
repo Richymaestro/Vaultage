@@ -15,6 +15,8 @@ COLUMNS = [
     "asset_symbol",
     "vault_address",
     "markets",
+    "deposits",
+    "withdraws",
 ]
 
 def _csv_path(vault_address: str) -> str:
@@ -49,8 +51,8 @@ def append_or_update_today(
     asset_symbol: str,
     vault_address: str,
     markets: List[str],
-    deposits: Decimal = Decimal(0),
-    withdraws: Decimal = Decimal(0),
+    deposits: Decimal,
+    withdraws: Decimal,
 ) -> pd.DataFrame:
     row = {
         "date": date_str,
