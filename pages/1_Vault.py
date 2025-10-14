@@ -294,8 +294,6 @@ if not df.empty:
     df_view["Fee"]           = df_disp.apply(lambda r: f"{_to_dec(r['fee_amount']):.2f}", axis=1)
     df_view["APY"]           = df_disp.apply(lambda r: f"{(_to_dec(r['apy']) * 100):.2f}", axis=1)
     df_view["Yield Earned"]  = df_disp.apply(lambda r: f"{_to_dec(r['yield_earned']):,.2f}", axis=1)
-    df_view["Deposits"]      = df_disp.apply(lambda r: f"{_to_dec(r['deposits'], 0):,.2f}", axis=1)
-    df_view["Withdraws"]     = df_disp.apply(lambda r: f"{_to_dec(r['withdraws'], 0):,.2f}", axis=1)
 
     st.dataframe(df_view, use_container_width=True, hide_index=True)
 
