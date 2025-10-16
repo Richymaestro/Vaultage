@@ -75,9 +75,9 @@ if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-compa
 
 for v in VAULTS:
     s = _slug(v["name"])
-    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{s}"):
+    if st.sidebar.button(f"{v['name']} vault data", use_container_width=True, key=f"sb-data-{s}"):
         _goto("vault", s)
-    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{s}"):
+    if st.sidebar.button(f"{v['name']} rebalancer data", use_container_width=True, key=f"sb-eoa-{s}"):
         _goto("eoa", s)
 
 logout_button()

@@ -203,9 +203,9 @@ if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-compa
 # Per-vault buttons
 for v in VAULTS:
     slug = slugify(v["name"])
-    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{slug}"):
+    if st.sidebar.button(f"{v['name']} vault data", use_container_width=True, key=f"sb-data-{slug}"):
         _goto("pages/1_Vault.py", slug)
-    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{slug}"):
+    if st.sidebar.button(f"{v['name']} rebalancer data", use_container_width=True, key=f"sb-eoa-{slug}"):
         _goto("pages/2_Reallocations.py", slug)
 
 st.sidebar.divider()

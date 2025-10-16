@@ -103,9 +103,9 @@ def _goto(page_py: str, slug: str | None = None):
 
 for v in APP_VAULTS:
     s = _slug(v["name"])
-    if st.sidebar.button(f"{v['name']} data", use_container_width=True, key=f"sb-data-{s}"):
+    if st.sidebar.button(f"{v['name']} Vault data", use_container_width=True, key=f"sb-data-{s}"):
         _goto("pages/1_Vault.py", s)
-    if st.sidebar.button(f"{v['name']} EOA data", use_container_width=True, key=f"sb-eoa-{s}"):
+    if st.sidebar.button(f"{v['name']} Rebalancer data", use_container_width=True, key=f"sb-eoa-{s}"):
         _goto("pages/2_Reallocations.py", s)
 
 st.sidebar.divider()

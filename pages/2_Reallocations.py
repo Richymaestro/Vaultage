@@ -76,9 +76,9 @@ if st.sidebar.button("📊 Comparisons", use_container_width=True, key="sb-compa
 # Per-vault links
 for vv in VAULTS:
     sg = slugify(vv["name"])
-    if st.sidebar.button(f"{vv['name']} data", use_container_width=True, key=f"sb-data-{sg}"):
+    if st.sidebar.button(f"{vv['name']} vault data", use_container_width=True, key=f"sb-data-{sg}"):
         _goto("vault", sg)
-    if st.sidebar.button(f"{vv['name']} EOA data", use_container_width=True, key=f"sb-eoa-{sg}"):
+    if st.sidebar.button(f"{vv['name']} rebalancer data", use_container_width=True, key=f"sb-eoa-{sg}"):
         _goto("eoa", sg)
 
 logout_button()
