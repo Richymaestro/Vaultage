@@ -32,14 +32,14 @@ COMPARISON_CSV_PATH   = os.path.join("data", "apy_comparisons.csv")
 # Standalone list for which vaults to compare (can differ from APP_VAULTS)
 VAULTS = [
     {"name": "kpk USDC Prime",      "address": "0xe108fbc04852B5df72f9E44d7C29F47e7A993aDd", "note": "USDC"},
-    {"name": "kpk USDT Yield",      "address": "0xd4e95092a8f108728c49f32A30f30556896563b5", "note": "USDT"},
+    {"name": "kpk WETH Yield",      "address": "0x234E5AE16eDf321AB5c2DDeBb0CCdf05aACb233b", "note": "WETH"},
     {"name": "kpk EURC Yield",      "address": "0x0c6aec603d48eBf1cECc7b247a2c3DA08b398DC1", "note": "EURC"},
     {"name": "Steakhouse USDC",     "address": "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB", "note": "USDC"},
     {"name": "Gauntlet USDC Prime", "address": "0xdd0f28e19C1780eb6396170735D45153D261490d", "note": "USDC"},
     {"name": "Smokehouse USDC",     "address": "0xBEeFFF209270748ddd194831b3fa287a5386f5bC", "note": "USDC"},
-    {"name": "Steakhouse USDT",     "address": "0xbEef047a543E45807105E51A8BBEFCc5950fcfBa", "note": "USDT"},
-    {"name": "Gauntlet USDT Prime", "address": "0x8CB3649114051cA5119141a34C200D65dc0Faa73", "note": "USDT"},
-    {"name": "Smokehouse USDT",     "address": "0xA0804346780b4c2e3bE118ac957D1DB82F9d7484", "note": "USDT"},
+    {"name": "Steakhouse WETH",     "address": "0xBEEf050ecd6a16c4e7bfFbB52Ebba7846C4b8cD4", "note": "WETH"},
+    {"name": "Gauntlet WETH Prime", "address": "0x2371e134e3455e0593363cBF89d3b6cf53740618", "note": "WETH"},
+    {"name": "MEV Capital wETH",     "address": "0x9a8bC3B04b7f3D87cfC09ba407dCED575f2d61D8", "note": "WETH"},
     {"name": "Gauntlet EURC Core",  "address": "0x2ed10624315b74a78f11FAbedAa1A228c198aEfB", "note": "EURC"},
 ]
 
@@ -126,7 +126,7 @@ def _underlying_from(name: str, asset_symbol: str | None) -> str:
         return s.upper()
     nm = (name or "").lower()
     if "usdc" in nm: return "USDC"
-    if "usdt" in nm: return "USDT"
+    if "usdt" in nm: return "WETH"
     if "eurc" in nm: return "EURC"
     return ""
 
